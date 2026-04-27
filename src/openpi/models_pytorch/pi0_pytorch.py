@@ -1,10 +1,15 @@
 import logging
 import math
+import os
 
 import torch
 from torch import Tensor
 from torch import nn
 import torch.nn.functional as F  # noqa: N812
+
+# Enable PyTorch TunableOp for optimized GEMM on ROCm
+os.environ["PYTORCH_TUNABLEOP_ENABLED"] = "1"
+os.environ["PYTORCH_TUNABLEOP_TUNING"] = "0"  # Use default optimized configs without tuning overhead
 
 import openpi.models.gemma as _gemma
 from openpi.models_pytorch.gemma_pytorch import PaliGemmaWithExpertModel
@@ -109,8 +114,10 @@ class PI0Pytorch(nn.Module):
             self.action_time_mlp_out = nn.Linear(action_expert_config.width, action_expert_config.width)
 
         torch.set_float32_matmul_precision("high")
+        # Use 'default' mode instead of 'max-autotune' for lower compilation overhead
+        # max-autotune causes excessive autotuning on ROCm with diminishing returns
         if config.pytorch_compile_mode is not None:
-            self.sample_actions = torch.compile(self.sample_actions, mode=config.pytorch_compile_mode)
+            self.sample_actions = torch.compile(self.sample_actions, mode="default")
 
         # Initialize gradient checkpointing flag
         self.gradient_checkpointing_enabled = False
@@ -247,7 +254,7 @@ class PI0Pytorch(nn.Module):
 
             # Embed state
             def state_proj_func(state):
-                return self.state_proj(state)
+                return self.state_proj(state.contiguous())
 
             state_emb = self._apply_checkpoint(state_proj_func, state)
 
@@ -269,7 +276,7 @@ class PI0Pytorch(nn.Module):
 
         # Fuse timestep + action information using an MLP
         def action_proj_func(noisy_actions):
-            return self.action_in_proj(noisy_actions)
+            return self.action_in_proj(noisy_actions.contiguous())
 
         action_emb = self._apply_checkpoint(action_proj_func, noisy_actions)
 
@@ -399,13 +406,13 @@ class PI0Pytorch(nn.Module):
             use_cache=True,
         )
 
-        dt = -1.0 / num_steps
-        dt = torch.tensor(dt, dtype=torch.float32, device=device)
+        # Pre-compute all timesteps to avoid while loop (enables better graph capture)
+        # timesteps go from 1.0 down to 0 in num_steps steps
+        times = torch.linspace(1.0, 0.0, num_steps + 1, dtype=torch.float32, device=device)
 
         x_t = noise
-        time = torch.tensor(1.0, dtype=torch.float32, device=device)
-        while time >= -dt / 2:
-            expanded_time = time.expand(bsize)
+        for i in range(num_steps):
+            expanded_time = times[i].expand(bsize)
             v_t = self.denoise_step(
                 state,
                 prefix_pad_masks,
@@ -413,10 +420,8 @@ class PI0Pytorch(nn.Module):
                 x_t,
                 expanded_time,
             )
-
-            # Euler step - use new tensor assignment instead of in-place operation
-            x_t = x_t + dt * v_t
-            time += dt
+            # Euler step
+            x_t = x_t + (times[i + 1] - times[i]) * v_t
         return x_t
 
     def denoise_step(
@@ -457,6 +462,6 @@ class PI0Pytorch(nn.Module):
         )
 
         suffix_out = outputs_embeds[1]
-        suffix_out = suffix_out[:, -self.config.action_horizon :]
+        suffix_out = suffix_out[:, -self.config.action_horizon :].contiguous()
         suffix_out = suffix_out.to(dtype=torch.float32)
         return self.action_out_proj(suffix_out)

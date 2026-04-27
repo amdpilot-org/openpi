@@ -142,5 +142,5 @@ def load(directory: pathlib.Path | str) -> dict[str, NormStats]:
     """Load the normalization stats from a directory."""
     path = pathlib.Path(directory) / "norm_stats.json"
     if not path.exists():
-        raise FileNotFoundError(f"Norm stats file not found at: {path}")
+        return {}  # Return empty stats if file not found
     return deserialize_json(path.read_text())
