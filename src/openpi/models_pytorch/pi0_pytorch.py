@@ -242,8 +242,8 @@ class PI0Pytorch(nn.Module):
         att_masks = []
 
         if not self.pi05:
-            if self.state_proj.weight.dtype == torch.float32:
-                state = state.to(torch.float32)
+            # Cast state to match state_proj dtype (should be bfloat16)
+            state = state.to(self.state_proj.weight.dtype)
 
             # Embed state
             def state_proj_func(state):
@@ -265,7 +265,8 @@ class PI0Pytorch(nn.Module):
         time_emb = create_sinusoidal_pos_embedding(
             timestep, self.action_in_proj.out_features, min_period=4e-3, max_period=4.0, device=timestep.device
         )
-        time_emb = time_emb.type(dtype=timestep.dtype)
+        # Cast to model dtype
+        time_emb = time_emb.to(self.action_in_proj.weight.dtype)
 
         # Fuse timestep + action information using an MLP
         def action_proj_func(noisy_actions):
@@ -311,6 +312,9 @@ class PI0Pytorch(nn.Module):
         pad_masks = torch.cat(pad_masks, dim=1)
         att_masks = torch.tensor(att_masks, dtype=embs.dtype, device=embs.device)
         att_masks = att_masks[None, :].expand(bsize, len(att_masks))
+
+        # Cast to model dtype
+        embs = embs.to(self.state_proj.weight.dtype)
 
         return embs, pad_masks, att_masks, adarms_cond
 
@@ -438,17 +442,17 @@ class PI0Pytorch(nn.Module):
 
         suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
 
-        full_att_2d_masks = torch.cat([prefix_pad_2d_masks, suffix_att_2d_masks], dim=2)
-
+        # For suffix-only processing, use suffix attention mask only
+        # The full mask (prefix + suffix) is only needed when processing both together
         prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
         position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
 
-        # Prepare attention masks
-        full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
+        # For suffix-only processing with past_key_values, use None for attention mask
+        # The model will use its default causal mask, and prefix context comes from past_key_values
         self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"  # noqa: SLF001
 
         outputs_embeds, _ = self.paligemma_with_expert.forward(
-            attention_mask=full_att_2d_masks_4d,
+            attention_mask=None,
             position_ids=position_ids,
             past_key_values=past_key_values,
             inputs_embeds=[None, suffix_embs],

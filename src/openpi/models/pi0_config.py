@@ -17,13 +17,14 @@ if TYPE_CHECKING:
 
 @dataclasses.dataclass(frozen=True)
 class Pi0Config(_model.BaseModelConfig):
-    dtype: str = "bfloat16"
+    dtype: str = "float32"
     paligemma_variant: _gemma.Variant = "gemma_2b"
     action_expert_variant: _gemma.Variant = "gemma_300m"
 
     # Set the model specific defaults.
-    action_dim: int = 32
-    action_horizon: int = 50
+    # Libero dataset uses 8-dimensional state and 10-step action horizon
+    action_dim: int = 8
+    action_horizon: int = 10
     max_token_len: int = None  # type: ignore
     # Pi05 has two differences from Pi0:
     # - the state input is part of the discrete language tokens rather than a continuous input that is part of the suffix
@@ -32,7 +33,7 @@ class Pi0Config(_model.BaseModelConfig):
     # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
     discrete_state_input: bool = None  # type: ignore
 
-    pytorch_compile_mode: str | None = "max-autotune"
+    pytorch_compile_mode: str | None = "reduce-overhead"
 
     def __post_init__(self):
         if self.max_token_len is None:

@@ -75,7 +75,12 @@ class Policy(BasePolicy):
             self._rng, sample_rng_or_pytorch_device = jax.random.split(self._rng)
         else:
             # Convert inputs to PyTorch tensors and move to correct device
-            inputs = jax.tree.map(lambda x: torch.from_numpy(np.array(x)).to(self._pytorch_device)[None, ...], inputs)
+            # Skip string inputs (like 'prompt') which should remain as strings
+            def convert_input(x):
+                if isinstance(x, str):
+                    return x
+                return torch.from_numpy(np.array(x)).to(self._pytorch_device)[None, ...]
+            inputs = jax.tree.map(convert_input, inputs)
             sample_rng_or_pytorch_device = self._pytorch_device
 
         # Prepare kwargs for sample_actions

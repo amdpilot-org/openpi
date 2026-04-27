@@ -60,29 +60,25 @@ class PaliGemmaWithExpertModel(nn.Module):
         self.to_bfloat16_for_selected_params(precision)
 
     def to_bfloat16_for_selected_params(self, precision: Literal["bfloat16", "float32"] = "bfloat16"):
-        if precision == "bfloat16":
-            self.to(dtype=torch.bfloat16)
-        elif precision == "float32":
+        if precision == "float32":
             self.to(dtype=torch.float32)
             return
-        else:
+        if precision != "bfloat16":
             raise ValueError(f"Invalid precision: {precision}")
 
-        params_to_keep_float32 = [
-            "vision_tower.vision_model.embeddings.patch_embedding.weight",
-            "vision_tower.vision_model.embeddings.patch_embedding.bias",
-            "vision_tower.vision_model.embeddings.position_embedding.weight",
-            "input_layernorm",
-            "post_attention_layernorm",
-            "model.norm",
-        ]
-
-        for name, param in self.named_parameters():
-            if any(selector in name for selector in params_to_keep_float32):
-                param.data = param.data.to(dtype=torch.float32)
+        # Keep vision tower in float32 - Siglip LayerNorm requires fp32 inputs/weights
+        # Convert only the language model to bfloat16
+        self.paligemma.language_model.to(dtype=torch.bfloat16)
+        self.gemma_expert.to(dtype=torch.bfloat16)
+        # Vision tower stays in float32
+        # Note: For float32 precision, entire model stays in float32 (handled above)
 
     def embed_image(self, image: torch.Tensor):
-        return self.paligemma.model.get_image_features(image)
+        # Siglip vision model requires float32 inputs for LayerNorm
+        image_fp32 = image.to(torch.float32)
+        img_emb = self.paligemma.model.get_image_features(image_fp32)
+        # Cast back to model dtype
+        return img_emb.to(self.paligemma.language_model.dtype)
 
     def embed_language_tokens(self, tokens: torch.Tensor):
         return self.paligemma.language_model.embed_tokens(tokens)

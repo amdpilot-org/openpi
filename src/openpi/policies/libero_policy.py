@@ -38,6 +38,13 @@ class LiberoInputs(transforms.DataTransformFn):
     # Determines which model will be used.
     # Do not change this for your own dataset.
     model_type: _model.ModelType
+    # Tokenizer for converting prompt strings to tokens
+    tokenizer: object = None
+
+    def __post_init__(self):
+        if self.tokenizer is None:
+            from openpi.models.tokenizer import PaligemmaTokenizer
+            object.__setattr__(self, "tokenizer", PaligemmaTokenizer(max_len=48))
 
     def __call__(self, data: dict) -> dict:
         # Possibly need to parse images to uint8 (H,W,C) since LeRobot automatically
@@ -79,6 +86,11 @@ class LiberoInputs(transforms.DataTransformFn):
         # stored in "prompt"; the output dict always needs to have the key "prompt").
         if "prompt" in data:
             inputs["prompt"] = data["prompt"]
+            # Tokenize the prompt for the model
+            prompt = data["prompt"]
+            tokenized_prompt, tokenized_prompt_mask = self.tokenizer.tokenize(prompt)
+            inputs["tokenized_prompt"] = tokenized_prompt
+            inputs["tokenized_prompt_mask"] = tokenized_prompt_mask
 
         return inputs
 
