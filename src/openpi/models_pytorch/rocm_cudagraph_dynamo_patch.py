@@ -99,6 +99,17 @@ def patch_dynamo_preserve_global_state_for_rocm_cudagraph_capture() -> bool:
 
         _cf.preserve_global_state = _preserve_global_state_skip_cuda_rng  # type: ignore[assignment]
         _cf._openpi_skip_cuda_rng_during_capture = True
+
+        # Re-decorate any functions that were already wrapped with the
+        # *old* preserve_global_state so they use the patched version.
+        # On PyTorch >=2.5 trace_frame is decorated at import time; without
+        # this re-decoration the old wrapper (which unconditionally calls
+        # torch.cuda.get_rng_state) is still referenced and triggers:
+        #   RuntimeError: Cannot call CUDAGeneratorImpl::current_seed
+        #   during CUDA graph capture
+        if hasattr(_cf, "trace_frame") and hasattr(_cf.trace_frame, "__wrapped__"):
+            _cf.trace_frame = _cf.preserve_global_state(_cf.trace_frame.__wrapped__)
+
         return True
     except Exception:
         return False

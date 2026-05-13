@@ -558,7 +558,9 @@ def main():
     print(f"Std:            {np.std(latencies):.1f} ms")
     print(f"Min:            {np.min(latencies):.1f} ms")
     print(f"Max:            {np.max(latencies):.1f} ms")
-    print(f"P50:            {np.percentile(latencies, 50):.1f} ms")
+    p50_val = np.percentile(latencies, 50)
+    print(f"P50:            {p50_val:.1f} ms")
+    print(f"p50_latency_ms: {p50_val:.1f}")
     print(f"P95:            {np.percentile(latencies, 95):.1f} ms")
     if use_events:
         print("\nEvent timing also recorded wall-clock:")
