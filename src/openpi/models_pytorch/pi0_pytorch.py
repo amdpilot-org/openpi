@@ -111,6 +111,19 @@ class PI0Pytorch(nn.Module):
         torch.set_float32_matmul_precision("high")
         if config.pytorch_compile_mode is not None:
             self.sample_actions = torch.compile(self.sample_actions, mode=config.pytorch_compile_mode)
+        else:
+            # On ROCm, default compile of denoise_step avoids the max-autotune Triton issues
+            # while still fusing the heavy per-timestep transformer work.
+            if torch.cuda.is_available() and torch.version.hip is not None:
+                import torch._inductor.config as inductor_config
+                import torch._dynamo.config as dynamo_config
+                inductor_config.max_autotune = False
+                inductor_config.max_autotune_gemm_backends = "ATEN"
+                inductor_config.triton.cudagraphs = False
+                inductor_config.triton.cudagraph_trees = True
+                inductor_config.memory_planning = False
+                dynamo_config.cache_size_limit = 128
+                self.denoise_step = torch.compile(self.denoise_step, mode="default")
 
         # Initialize gradient checkpointing flag
         self.gradient_checkpointing_enabled = False
@@ -389,7 +402,6 @@ class PI0Pytorch(nn.Module):
 
         # Compute image and language key value cache
         prefix_att_2d_masks_4d = self._prepare_attention_masks_4d(prefix_att_2d_masks)
-        self.paligemma_with_expert.paligemma.language_model.config._attn_implementation = "eager"  # noqa: SLF001
 
         _, past_key_values = self.paligemma_with_expert.forward(
             attention_mask=prefix_att_2d_masks_4d,
@@ -445,7 +457,6 @@ class PI0Pytorch(nn.Module):
 
         # Prepare attention masks
         full_att_2d_masks_4d = self._prepare_attention_masks_4d(full_att_2d_masks)
-        self.paligemma_with_expert.gemma_expert.model.config._attn_implementation = "eager"  # noqa: SLF001
 
         outputs_embeds, _ = self.paligemma_with_expert.forward(
             attention_mask=full_att_2d_masks_4d,
