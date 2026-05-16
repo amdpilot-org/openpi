@@ -57,6 +57,11 @@ class PaliGemmaWithExpertModel(nn.Module):
         self.gemma_expert = GemmaForCausalLM(config=action_expert_config_hf)
         self.gemma_expert.model.embed_tokens = None
 
+        # Eager attention is required because the custom blockwise attention masks
+        # (mixed prefix causal / suffix causal) used by pi0 are not handled by SDPA.
+        self.paligemma.language_model.config._attn_implementation = "eager"
+        self.gemma_expert.model.config._attn_implementation = "eager"
+
         self.to_bfloat16_for_selected_params(precision)
 
     def to_bfloat16_for_selected_params(self, precision: Literal["bfloat16", "float32"] = "bfloat16"):
