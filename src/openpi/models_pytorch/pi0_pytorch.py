@@ -110,7 +110,11 @@ class PI0Pytorch(nn.Module):
 
         torch.set_float32_matmul_precision("high")
         if config.pytorch_compile_mode is not None:
-            self.sample_actions = torch.compile(self.sample_actions, mode=config.pytorch_compile_mode)
+            compile_mode = config.pytorch_compile_mode
+            # ROCm/MI300X: max-autotune causes pathologically slow warmup and Triton OOM
+            if torch.version.hip and compile_mode in ("max-autotune", "max-autotune-no-cudagraphs"):
+                compile_mode = "default"
+            self.sample_actions = torch.compile(self.sample_actions, mode=compile_mode)
 
         # Initialize gradient checkpointing flag
         self.gradient_checkpointing_enabled = False
