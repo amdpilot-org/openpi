@@ -17,6 +17,17 @@ IMAGE_KEYS = (
 IMAGE_RESOLUTION = (224, 224)
 
 
+class SimpleProcessedObservation:
+    """Simple container for preprocessed observation data.
+
+    Moved to module scope to avoid torch.compile LOAD_BUILD_CLASS graph break.
+    """
+
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
 def preprocess_observation_pytorch(
     observation,
     *,
@@ -155,12 +166,6 @@ def preprocess_observation_pytorch(
             out_masks[key] = torch.ones(batch_shape, dtype=torch.bool, device=observation.state.device)
         else:
             out_masks[key] = observation.image_masks[key]
-
-    # Create a simple object with the required attributes instead of using the complex Observation class
-    class SimpleProcessedObservation:
-        def __init__(self, **kwargs):
-            for key, value in kwargs.items():
-                setattr(self, key, value)
 
     return SimpleProcessedObservation(
         images=out_images,
