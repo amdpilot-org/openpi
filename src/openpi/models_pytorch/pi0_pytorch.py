@@ -110,7 +110,9 @@ class PI0Pytorch(nn.Module):
 
         torch.set_float32_matmul_precision("high")
         if config.pytorch_compile_mode is not None:
-            self.sample_actions = torch.compile(self.sample_actions, mode=config.pytorch_compile_mode)
+            # On ROCm/HIP, max-autotune causes Triton shared-memory OOM and slow warmup
+            compile_mode = "default" if torch.version.hip is not None else config.pytorch_compile_mode
+            self.sample_actions = torch.compile(self.sample_actions, mode=compile_mode)
 
         # Initialize gradient checkpointing flag
         self.gradient_checkpointing_enabled = False
@@ -247,7 +249,7 @@ class PI0Pytorch(nn.Module):
 
             # Embed state
             def state_proj_func(state):
-                return self.state_proj(state)
+                return self.state_proj(state.contiguous())
 
             state_emb = self._apply_checkpoint(state_proj_func, state)
 
@@ -269,7 +271,7 @@ class PI0Pytorch(nn.Module):
 
         # Fuse timestep + action information using an MLP
         def action_proj_func(noisy_actions):
-            return self.action_in_proj(noisy_actions)
+            return self.action_in_proj(noisy_actions.contiguous())
 
         action_emb = self._apply_checkpoint(action_proj_func, noisy_actions)
 
@@ -362,7 +364,7 @@ class PI0Pytorch(nn.Module):
             forward_func, prefix_embs, suffix_embs, att_2d_masks_4d, position_ids, adarms_cond
         )
 
-        suffix_out = suffix_out[:, -self.config.action_horizon :]
+        suffix_out = suffix_out[:, -self.config.action_horizon :].contiguous()
         suffix_out = suffix_out.to(dtype=torch.float32)
 
         # Apply gradient checkpointing to final action projection if enabled
@@ -399,13 +401,13 @@ class PI0Pytorch(nn.Module):
             use_cache=True,
         )
 
-        dt = -1.0 / num_steps
-        dt = torch.tensor(dt, dtype=torch.float32, device=device)
+        dt_scalar = -1.0 / num_steps
+        dt_tensor = torch.tensor(dt_scalar, dtype=torch.float32, device=device)
 
         x_t = noise
-        time = torch.tensor(1.0, dtype=torch.float32, device=device)
-        while time >= -dt / 2:
-            expanded_time = time.expand(bsize)
+        for step in range(num_steps):
+            time_val = 1.0 + step * dt_scalar
+            expanded_time = torch.full((bsize,), time_val, dtype=torch.float32, device=device)
             v_t = self.denoise_step(
                 state,
                 prefix_pad_masks,
@@ -414,9 +416,8 @@ class PI0Pytorch(nn.Module):
                 expanded_time,
             )
 
-            # Euler step - use new tensor assignment instead of in-place operation
-            x_t = x_t + dt * v_t
-            time += dt
+            # Euler step
+            x_t = x_t + dt_tensor * v_t
         return x_t
 
     def denoise_step(
@@ -457,6 +458,6 @@ class PI0Pytorch(nn.Module):
         )
 
         suffix_out = outputs_embeds[1]
-        suffix_out = suffix_out[:, -self.config.action_horizon :]
+        suffix_out = suffix_out[:, -self.config.action_horizon :].contiguous()
         suffix_out = suffix_out.to(dtype=torch.float32)
         return self.action_out_proj(suffix_out)
