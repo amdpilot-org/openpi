@@ -363,9 +363,8 @@ class SiglipAttention(nn.Module):
         self.dropout = config.attention_dropout
         self.is_causal = False
 
-        self.k_proj = nn.Linear(self.embed_dim, self.embed_dim)
-        self.v_proj = nn.Linear(self.embed_dim, self.embed_dim)
-        self.q_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        # Fused QKV projection: one GEMM (M, K) -> (M, 3*K) instead of three separate GEMMs
+        self.qkv_proj = nn.Linear(self.embed_dim, self.embed_dim * 3)
         self.out_proj = nn.Linear(self.embed_dim, self.embed_dim)
 
     def forward(
@@ -378,9 +377,8 @@ class SiglipAttention(nn.Module):
 
         batch_size, seq_length, embed_dim = hidden_states.shape
 
-        queries = self.q_proj(hidden_states)
-        keys = self.k_proj(hidden_states)
-        values = self.v_proj(hidden_states)
+        qkv = self.qkv_proj(hidden_states)
+        queries, keys, values = qkv.chunk(3, dim=-1)
 
         queries = queries.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
         keys = keys.view(batch_size, seq_length, self.num_heads, self.head_dim).transpose(1, 2)
@@ -510,13 +508,9 @@ class SiglipPreTrainedModel(PreTrainedModel):
         elif isinstance(module, nn.Embedding):
             default_flax_embed_init(module.weight)
         elif isinstance(module, SiglipAttention):
-            nn.init.xavier_uniform_(module.q_proj.weight)
-            nn.init.xavier_uniform_(module.k_proj.weight)
-            nn.init.xavier_uniform_(module.v_proj.weight)
+            nn.init.xavier_uniform_(module.qkv_proj.weight)
             nn.init.xavier_uniform_(module.out_proj.weight)
-            nn.init.zeros_(module.q_proj.bias)
-            nn.init.zeros_(module.k_proj.bias)
-            nn.init.zeros_(module.v_proj.bias)
+            nn.init.zeros_(module.qkv_proj.bias)
             nn.init.zeros_(module.out_proj.bias)
         elif isinstance(module, SiglipMLP):
             nn.init.xavier_uniform_(module.fc1.weight)
