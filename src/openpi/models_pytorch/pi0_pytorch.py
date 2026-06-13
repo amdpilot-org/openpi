@@ -404,7 +404,7 @@ class PI0Pytorch(nn.Module):
 
         x_t = noise
         time = torch.tensor(1.0, dtype=torch.float32, device=device)
-        while time >= -dt / 2:
+        for _ in range(num_steps):
             expanded_time = time.expand(bsize)
             v_t = self.denoise_step(
                 state,
